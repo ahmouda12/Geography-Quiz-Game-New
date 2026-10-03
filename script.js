@@ -1,20 +1,137 @@
 let stateInfo = {};
 let stateInfo2 = {};
-let score = 100;
-let timer = "";
+let score = 0;
 let clickCount = 0;
-let startInterval = null;
-let fadeOut = 0;
-let fadeIn = 0;
-let minutes = 0;
-let seconds = 0;
+let gameTimerInterval = null;
+let gameAudioInterval = null;
+let secondsRemaining = 120;
 let stateInfoLength;
 let stateInfoLength2;
-let audio1 = new Audio("./audio/game-play.mp3");
-let audio2 = new Audio("./audio/claps3.mp3");
-let audio3 = new Audio("./audio/applause10.mp3");
-let audio4 = new Audio("./audio/boo3.mp3");
-let audio5 = new Audio("./audio/scala-milan.wav");
+let currentPlayerName = "";
+let savedPlayerName = "";
+let leaderboardEntries = [];
+let leaderboardStorageReady = true;
+let gameStartTime = 0;
+let gameElapsedSeconds = 0;
+let winnerRecorded = false;
+const leaderboardStorageKey = "geographyQuizLeaderboard";
+const playerNameStorageKey = "geographyQuizPlayerName";
+const leaderboardResetPassword = "1234";
+const hasBrowserEnvironment = typeof window !== "undefined" && typeof document !== "undefined" && typeof $ !== "undefined";
+let soundContext = null;
+let gameplayAudioRequested = false;
+let completionAudioRequested = false;
+
+function prepareGameAudio() {
+  const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextConstructor) {
+    console.error("Web Audio is unavailable; gameplay audio fallback cannot be started.");
+    return;
+  }
+  if (!soundContext) soundContext = new AudioContextConstructor();
+  if (soundContext.state === "suspended") {
+    soundContext.resume().catch(function(error) {
+      console.error("Unable to enable gameplay audio:", error);
+    });
+  }
+}
+
+function playSoftTone(notes) {
+  if (!soundContext) prepareGameAudio();
+  if (!soundContext) return;
+
+  const scheduleNotes = function() {
+    const startAt = soundContext.currentTime;
+    notes.forEach(function(note) {
+      const oscillator = soundContext.createOscillator();
+      const volume = soundContext.createGain();
+      const noteStart = startAt + note.delay;
+      oscillator.type = "sine";
+      oscillator.frequency.value = note.frequency;
+      volume.gain.setValueAtTime(0.0001, noteStart);
+      volume.gain.exponentialRampToValueAtTime(0.1, noteStart + 0.03);
+      volume.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.35);
+      oscillator.connect(volume);
+      volume.connect(soundContext.destination);
+      oscillator.start(noteStart);
+      oscillator.stop(noteStart + 0.36);
+    });
+  };
+
+  if (soundContext.state === "suspended") {
+    soundContext.resume().then(scheduleNotes).catch(function(error) {
+      console.error("Unable to resume gameplay audio:", error);
+    });
+    return;
+  }
+  scheduleNotes();
+}
+
+function startFallbackGameplayAudio() {
+  if (!gameplayAudioRequested || gameAudioInterval) return;
+  const playPhrase = function() {
+    playSoftTone([
+      {frequency: 523, delay: 0},
+      {frequency: 659, delay: 0.3},
+      {frequency: 587, delay: 0.6},
+      {frequency: 784, delay: 0.9}
+    ]);
+  };
+  playPhrase();
+  gameAudioInterval = setInterval(playPhrase, 8000);
+}
+
+function playGameplayAudio() {
+  gameplayAudioRequested = true;
+  prepareGameAudio();
+  const audio = document.getElementById("gameplay-audio");
+  audio.volume = 0.2;
+  audio.currentTime = 0;
+  const playback = audio.play();
+  if (playback && typeof playback.catch === "function") {
+    playback.catch(function(error) {
+      console.error("Unable to play gameplay audio:", error);
+      startFallbackGameplayAudio();
+    });
+  }
+}
+
+function stopGameplayAudio() {
+  gameplayAudioRequested = false;
+  clearInterval(gameAudioInterval);
+  gameAudioInterval = null;
+  const audio = document.getElementById("gameplay-audio");
+  audio.pause();
+  audio.currentTime = 0;
+}
+
+function playCompletionAudio() {
+  completionAudioRequested = true;
+  const audio = document.getElementById("completion-audio");
+  audio.volume = 0.8;
+  audio.currentTime = 0;
+  const playback = audio.play();
+  if (playback && typeof playback.catch === "function") {
+    playback.catch(function(error) {
+      console.error("Unable to play completion audio:", error);
+      if (completionAudioRequested) {
+        playSoftTone([
+          {frequency: 523, delay: 0},
+          {frequency: 659, delay: 0.16},
+          {frequency: 784, delay: 0.32},
+          {frequency: 1047, delay: 0.48}
+        ]);
+      }
+    });
+  }
+}
+
+function stopCompletionAudio() {
+  completionAudioRequested = false;
+  const audio = document.getElementById("completion-audio");
+  audio.pause();
+  audio.currentTime = 0;
+}
 
 let usaInfo = {HI:"Hawaii",AK:"Alaska",FL:"Florida",SC:"South Carolina",GA:"Georgia",AL:"Alabama",NC:"North Carolina",
 TN:"Tennessee",RI:"Rhode Island",CT:"Connecticut",MA:"Massachusetts",ME:"Maine",NH:"New Hampshire",VT:"Vermont",
@@ -24,178 +141,272 @@ NV:"Nevada",UT:"Utah",CO:"Colorado",NM:"New Mexico",OR:"Oregon",ND:"North Dakota
 IA:"Iowa",MS:"Mississippi",IN:"Indiana",IL:"Illinois",MN:"Minnesota",WI:"Wisconsin",MO:"Missouri",AR:"Arkansas",
 OK:"Oklahoma",KS:"Kansas",LA:"Louisiana",VA:"Virginia"};
 
-let africaInfo = {BF:"Burkina Faso",DJ:"Djibouti",BI:"Burundi",BJ:"Benin",ZA:"South Africa",BW:"Botswana",DZ:"Algeria",
-ET:"Ethiopia",RW:"Rwanda",TZ:"Tanzania",GQ:"Equatorial Guinea",NA:"Namibia",NGE:"Niger",NG:"Nigeria",TUN:"Tunisia",
-LR:"Liberia",LS:"Lesotho",ZW:"Zimbabwe",TG:"Togo",TD:"Chad",ER:"Eritrea",LY:"Libya",GW:"Guinea-Bissau",ZM:"Zambia",
-CI:"Côte d'Ivoire",EH:"Western Sahara",CM:"Cameroon",EG:"Egypt",SL:"Sierra Leone",CG:"Congo",CF:"Central African Republic",
-AO:"Angola",CD:"Democratic Republic of Congo",GAB:"Gabon",GN:"Guinea",XS:"Somaliland",GH:"Ghana",SZ:"Swaziland",
-MG:"Madagascar",MAR:"Morocco",KE:"Kenya",SS:"South Sudan",ML:"Mali",MW:"Malawi",SO:"Somalia",SN:"Senegal",MR:"Mauritania",
-UG:"Uganda",SUD:"Sudan",MZ:"Mozambique"};
 
-let europeInfo = {BE:"Belgium",FR:"France",BG:"Bulgaria",DK:"Denmark",HR:"Croatia",DER:"Germany",BA:"Bosnia and Herzegovina",
-HU:"Hungary",FI:"Finland",BY:"Belarus",GR:"Greece",RU:"Russia",NL:"Netherlands",PT:"Portugal",NO:"Norway",LV:"Latvia",
-LT:"Lithuania",LU:"Luxembourg",PL:"Poland",XK:"Kosovo",CH:"Switzerland",EE:"Estonia",IS:"Iceland",ALB:"Albania",IT:"Italy",
-CZ:"Czech Republic",GB:"United Kingdom",IE:"Ireland",ES:"Spain",MEO:"Montenegro",MLD:"Moldova",RO:"Romania",RS:"Serbia",
-MK:"Macedonia",SK:"Slovakia",SI:"Slovenia",UA:"Ukraine",SE:"Sweden",AT:"Austria"};
+//hide all non-USA content on load and set up the single-region game flow
+if (hasBrowserEnvironment) {
+  applyStateFlagShapes();
 
-let southAmericaInfo = {PY:"Paraguay",COL:"Colombia",VE:"Venezuela",CL:"Chile",SR:"Suriname",BO:"Bolivia",EC:"Ecuador",
-ARG:"Argentina",GY:"Guyana",BR:"Brazil",PE:"Peru",UY:"Uruguay",FK:"Falkland Islands"};
+  $(window).on("load", function() {
+    loadSavedPlayerData();
+    renderLeaderboard();
+    $("#usa-map").hide();
+    $("#click-start,#start-game,#state-id,#score").hide();
+    let pendingDuplicatePlayerName = "";
 
-let asiaInfo = {BD:"Bangladesh",MON:"Mongolia",BT:"Bhutan",JO:"Jordan",PS:"Palestine",LB:"Lebanon",LAS:"Laos",TW:"Taiwan",
-TR:"Turkey",LK:"Sri Lanka",TL:"Timor-Leste",TM:"Turkmenistan",TJ:"Tajikistan",TH:"Thailand",NP:"Nepal",PK:"Pakistan",
-PH:"Philippines",AE:"United Arab Emirates",CN:"China",AF:"Afghanistan",IQ:"Iraq",JP:"Japan",IR:"Iran",AM:"Armenia",SY:"Syria",
-VN:"Vietnam",GE:"Georgia",ISL:"Israel",IND:"India",AZB:"Azerbaijan",IDO:"Indonesia",OM:"Oman",KG:"Kyrgyzstan",UZ:"Uzbekistan",
-MM:"Myanmar",KH:"Cambodia",CY:"Cyprus",QA:"Qatar",KR:"South Korea",KP:"North Korea",KW:"Kuwait",KZ:"Kazakhstan",SA:"Saudi Arabia",
-MY:"Malaysia",YE:"Yemen"};
+    $("#playerNameModal").on("show.bs.modal", function() {
+      $("#quiz-name-entry").val("");
+      $("#player-name-form").show();
+      $("#duplicate-player-confirm").hide();
+      pendingDuplicatePlayerName = "";
+    });
+    $(".modal").on("shown.bs.modal", function() {
+      $(this).find("form:visible input:visible, form:visible textarea:visible, form:visible select:visible").first().trigger("focus");
+    });
+    gameStartBinding();
+    gameRestartBinding();
+    usaMapBinding();
+    $("#hide-usa").trigger("click");
+    $("#start-quiz").on("click", function() {
+      $("#quiz-name-entry").val("");
+      $("#playerNameModal").modal("show");
+    });
 
-let canadaInfo = {CANT:"Northwest Territories",CANU:"Nunavut",CANS:"Nova Scotia",CABC:"British Columbia",CASK:"Saskatchewan",
-CAQC:"Québec",CAPE:"Prince Edward Island",CAMB:"Manitoba",CAYT:"Yukon",CANB:"New Brunswick",CANL:"Newfoundland and Labrador",
-CAON:"Ontario",CAAB:"Alberta"};
+    function startGameWithPlayerName(playerName) {
+      currentPlayerName = playerName;
+      savedPlayerName = playerName;
+      if (!savePlayerName()) return;
+      playGameplayAudio();
+      $("#playerNameModal").one("hidden.bs.modal", function() {
+        $("#hide-usa").trigger("click");
+        $("#start-game").trigger("click");
+      });
+      $("#playerNameModal").modal("hide");
+    }
 
-let centralAmericaInfo = {CAMPR:"Puerto Rico",CAMDO:"Dominican Republic",CAMNI:"Nicaragua",CAMPA:"Panama",CAMSV:"El Salvador",
-CAMHT:"Haiti",CAMTT:"Trinidad and Tobago",CAMJM:"Jamaica",CAMGT:"Guatemala",CAMHN:"Honduras",CAMBZ:"Belize",CAMBS:"Bahamas",
-CAMCR:"Costa Rica",CAMMX:"Mexico",CAMCU:"Cuba"};
+    $("#player-name-form").on("submit", function(event) {
+      event.preventDefault();
+      const playerName = $("#quiz-name-entry").val().trim();
+      if (!playerName) {
+        $("#quiz-name-entry").trigger("focus");
+        return;
+      }
 
-let australiaInfo = {AUACT:"Australian Capital Territory",AUWA:"Western Australia",AUTAS:"Tasmania",AUVIC:"Victoria",
-AUNT:"Northern Territory",AUQLD:"Queensland",AUSA:"South Australia",AUNSW:"New South Wales"};
+      const matchingWinner = leaderboardEntries.find(function(entry) {
+        return entry.name.trim().toLocaleLowerCase() === playerName.toLocaleLowerCase();
+      });
+      if (matchingWinner) {
+        pendingDuplicatePlayerName = playerName;
+        $("#duplicate-player-message").text(
+          playerName + " already has a leaderboard result. Replacing it will remove the saved result for this name. Continue?"
+        );
+        $("#player-name-form").hide();
+        $("#duplicate-player-confirm").show();
+        $("#replace-existing-result").trigger("focus");
+        return;
+      }
 
-//hide all maps on load and call all game functions
-$( window ).on( "load", function() {
-  $("#usa-map,#africa-map,#europe-map,#south-america-map").hide();
-  $("#asia-map,#canada-map,#central-america-map,#australia-map").hide();
-  $("#click-start,#start-game,#state-id,#score").hide();
-  gameStartBinding();
-  gameRestartBinding();
-  usaMapBinding();
-  africaMapBinding();
-  europeMapBinding();
-  southAmericaMapBinding();
-  asiaMapBinding();
-  canadaMapBinding();
-  centralAmericaMapBinding();
-  australiaMapBinding();
-});
+      startGameWithPlayerName(playerName);
+    });
+    $("#keep-existing-result").on("click", function() {
+      pendingDuplicatePlayerName = "";
+      $("#duplicate-player-confirm").hide();
+      $("#player-name-form").show();
+      $("#quiz-name-entry").trigger("focus");
+    });
+    $("#replace-existing-result").on("click", function() {
+      const playerName = pendingDuplicatePlayerName;
+      if (!playerName) return;
 
-// show USA map and hide thw world flag map image and unbind click on maps and images befor start
+      leaderboardEntries = leaderboardEntries.filter(function(entry) {
+        return entry.name.trim().toLocaleLowerCase() !== playerName.toLocaleLowerCase();
+      });
+      try {
+        localStorage.setItem(leaderboardStorageKey, JSON.stringify(leaderboardEntries));
+        renderLeaderboard();
+      } catch (error) {
+        leaderboardStorageReady = false;
+        showStorageMessage("The existing result could not be replaced.", true);
+        console.error("Unable to replace leaderboard result:", error);
+        $("#duplicate-player-confirm").hide();
+        $("#player-name-form").show();
+        return;
+      }
+
+      pendingDuplicatePlayerName = "";
+      $("#duplicate-player-confirm").hide();
+      $("#player-name-form").show();
+      startGameWithPlayerName(playerName);
+    });
+    $("#cancel-player-name").on("click", stopGameplayAudio);
+    $("#cancel-quiz").on("click", function() {
+      $("#close").trigger("click");
+    });
+    $("#open-reset").on("click", function() {
+      $("#reset-password").val("");
+      $("#reset-error").text("");
+      $("#resetModal").modal("show");
+    });
+    $("#reset-form").on("submit", function(event) {
+      event.preventDefault();
+      if ($("#reset-password").val() !== leaderboardResetPassword) {
+        $("#reset-error").text("Incorrect password.");
+        $("#reset-password").trigger("focus");
+        return;
+      }
+      resetSavedPlayerData();
+    });
+    document.body.classList.remove("ui-loading");
+  });
+}
+
+function loadSavedPlayerData() {
+  try {
+    savedPlayerName = localStorage.getItem(playerNameStorageKey) || "";
+    const savedLeaderboard = localStorage.getItem(leaderboardStorageKey);
+    leaderboardEntries = savedLeaderboard ? JSON.parse(savedLeaderboard) : [];
+    if (!Array.isArray(leaderboardEntries) || leaderboardEntries.some(function(entry) {
+      return typeof entry.name !== "string" || typeof entry.score !== "number" ||
+        typeof entry.elapsedSeconds !== "number" || typeof entry.completedAt !== "number";
+    })) {
+      throw new Error("Saved leaderboard data is invalid.");
+    }
+  } catch (error) {
+    leaderboardStorageReady = false;
+    showStorageMessage("Saved player data could not be loaded. The leaderboard cannot be updated.", true);
+    console.error("Unable to load saved player data:", error);
+    leaderboardEntries = [];
+    savedPlayerName = "";
+  }
+}
+
+function savePlayerName() {
+  if (!leaderboardStorageReady) return false;
+  try {
+    localStorage.setItem(playerNameStorageKey, savedPlayerName);
+    showStorageMessage("", false);
+    return true;
+  } catch (error) {
+    leaderboardStorageReady = false;
+    showStorageMessage("Your name could not be saved in this browser.", true);
+    console.error("Unable to save player name:", error);
+    return false;
+  }
+}
+
+function renderLeaderboard() {
+  const tbody = $("#leaderboard-entries").empty();
+  if (!leaderboardEntries.length) {
+    const row = $("<tr>");
+    row.append($("<td>").attr("colspan", 4).text("No winners yet."));
+    tbody.append(row);
+    return;
+  }
+
+  leaderboardEntries.slice(0, 3).forEach(function(entry, index) {
+    const row = $("<tr>");
+    row.append($("<td>").text(index + 1));
+    row.append($("<td>").text(entry.name));
+    row.append($("<td>").text(entry.score + "%"));
+    row.append($("<td>").text(formatElapsedTime(entry.elapsedSeconds)));
+    tbody.append(row);
+  });
+}
+
+function formatElapsedTime(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes + ":" + String(seconds).padStart(2, "0");
+}
+
+function showStorageMessage(message, isError) {
+  $("#storage-message").text(message).toggleClass("error", Boolean(isError));
+}
+
+function recordWinner(name, finalScore, elapsedSeconds) {
+  if (!leaderboardStorageReady) return;
+  leaderboardEntries.push({
+    name: name,
+    score: finalScore,
+    elapsedSeconds: elapsedSeconds,
+    completedAt: Date.now()
+  });
+  leaderboardEntries.sort(function(first, second) {
+    return second.score - first.score ||
+      first.elapsedSeconds - second.elapsedSeconds ||
+      first.completedAt - second.completedAt;
+  });
+  leaderboardEntries = leaderboardEntries.slice(0, 3);
+
+  try {
+    localStorage.setItem(leaderboardStorageKey, JSON.stringify(leaderboardEntries));
+    renderLeaderboard();
+    showStorageMessage("", false);
+  } catch (error) {
+    leaderboardStorageReady = false;
+    showStorageMessage("Your win could not be saved in this browser.", true);
+    console.error("Unable to save leaderboard:", error);
+  }
+}
+
+function resetSavedPlayerData() {
+  try {
+    localStorage.removeItem(leaderboardStorageKey);
+    localStorage.removeItem(playerNameStorageKey);
+    leaderboardStorageReady = true;
+    leaderboardEntries = [];
+    savedPlayerName = "";
+    currentPlayerName = "";
+    renderLeaderboard();
+    showStorageMessage("", false);
+    $("#resetModal").modal("hide");
+  } catch (error) {
+    showStorageMessage("Saved player data could not be erased.", true);
+    console.error("Unable to erase saved player data:", error);
+  }
+}
+
+function applyStateFlagShapes() {
+  const svgNamespace = "http://www.w3.org/2000/svg";
+  const measuringSvg = document.createElementNS(svgNamespace, "svg");
+  measuringSvg.setAttribute("width", "1");
+  measuringSvg.setAttribute("height", "1");
+  measuringSvg.style.cssText = "position:fixed;left:-10px;top:0;overflow:visible";
+  const measuringPath = document.createElementNS(svgNamespace, "path");
+  measuringSvg.append(measuringPath);
+  document.body.append(measuringSvg);
+
+  $(".state-flag:not(.usa-flag)").each(function() {
+    const stateKey = this.dataset.stateKey;
+    const statePath = document.getElementById(stateKey);
+    if (!statePath) {
+      measuringSvg.remove();
+      throw new Error("Missing map outline for state flag: " + stateKey);
+    }
+
+    const pathData = statePath.getAttribute("d");
+    measuringPath.setAttribute("d", pathData);
+    const bounds = measuringPath.getBBox();
+    const flagHeight = parseFloat(getComputedStyle(this).height);
+    const svg = `<svg xmlns="${svgNamespace}" viewBox="${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}" preserveAspectRatio="none"><path fill="white" d="${pathData}"/></svg>`;
+    this.style.setProperty("--state-flag-mask", `url("data:image/svg+xml,${encodeURIComponent(svg)}")`);
+    this.style.width = `${flagHeight * bounds.width / bounds.height}px`;
+  });
+
+  measuringSvg.remove();
+  document.body.classList.add("flags-ready");
+}
+
+// show the United States map and initialize the state list
 function usaMapBinding() {
-$("#hide-usa").click(function(e) {
-  $("#world-flag-map,#select-map").hide();
-  $("#usa-map,#click-start,#start-game").show();
-  $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-  $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-  stateInfo = JSON.parse(JSON.stringify(usaInfo));
-  stateInfo2 = JSON.parse(JSON.stringify(usaInfo));
-  timer = "3:00";
-  info();
-})};
-
-// show Africa map and hide thw world flag map image and unbind click on maps and images befor start
-function africaMapBinding() {
-$("#hide-africa").click(function(e) {
-  $("#world-flag-map,#select-map").hide();
-  $("#africa-map,#click-start,#start-game").show();
-  $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-  $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-  stateInfo = JSON.parse(JSON.stringify(africaInfo));
-  stateInfo2 = JSON.parse(JSON.stringify(africaInfo));
-  timer = "3:00";
-  info();
-})};
-
-// show Europe map and hide thw world flag map image and unbind click on maps and images befor start
-function europeMapBinding() {
-$("#hide-europe").click(function(e) {
-  $("#world-flag-map,#select-map").hide();
-  $("#europe-map,#click-start,#start-game").show();
-  $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-  $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-  stateInfo = JSON.parse(JSON.stringify(europeInfo));
-  stateInfo2 = JSON.parse(JSON.stringify(europeInfo));
-  timer = "3:00";
-  info();
-})};
-
-// show South America map and hide thw world flag map image and unbind click on maps and images befor start
-function southAmericaMapBinding() {
-$("#hide-south-america").click(function(e) {
-  $("#world-flag-map,#select-map").hide();
-  $("#south-america-map,#click-start,#start-game").show();
-  $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-  $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-  // console.log("DEBUG ====", stateInfo, southAmericaInfo);
-  stateInfo = JSON.parse(JSON.stringify(southAmericaInfo));
-  stateInfo2 = JSON.parse(JSON.stringify(southAmericaInfo));
-  timer = "1:00";
-  $("#timer").text("01m 00s");
-  info();
-})};
-
-// show Canada map and hide thw world flag map image and unbind click on maps and images befor start
-function canadaMapBinding() {
-  $("#hide-canada").click(function(e) {
-    $("#world-flag-map,#select-map").hide();
-    $("#canada-map,#click-start,#start-game").show();
-    $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-    $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-    stateInfo = JSON.parse(JSON.stringify(canadaInfo));
-    stateInfo2 = JSON.parse(JSON.stringify(canadaInfo));
-    timer = "1:00";
-    $("#timer").text("01m 00s");
+  $("#hide-usa").off("click.usaMap").on("click.usaMap", function() {
+    $("#usa-map").show();
+    stateInfo = JSON.parse(JSON.stringify(usaInfo));
+    stateInfo2 = JSON.parse(JSON.stringify(usaInfo));
+    secondsRemaining = 120;
+    $("#timer").text("02m 00s");
     info();
-})};
-
-// show Asia map and hide thw world flag map image and unbind click on maps and images befor start
-function asiaMapBinding() {
-  $("#hide-asia").click(function(e) {
-    $("#world-flag-map,#select-map").hide();
-    $("#asia-map,#click-start,#start-game").show();
-    $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-    $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-    stateInfo = JSON.parse(JSON.stringify(asiaInfo));
-    stateInfo2 = JSON.parse(JSON.stringify(asiaInfo));
-    timer = "3:00";
-    info();
-})};
-
-// show Central America map and hide thw world flag map image and unbind click on maps and images befor start
-function centralAmericaMapBinding() {
-  $("#hide-central-america").click(function(e) {
-    $("#world-flag-map,#select-map").hide();
-    $("#central-america-map,#click-start,#start-game").show();
-    $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-    $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-    stateInfo = JSON.parse(JSON.stringify(centralAmericaInfo));
-    stateInfo2 = JSON.parse(JSON.stringify(centralAmericaInfo));
-    timer = "1:00";
-    $("#timer").text("01m 00s");
-    info();
-})};
-
-// show Australia map and hide thw world flag map image and unbind click on maps and images befor start
-function australiaMapBinding() {
-  $("#hide-australia").click(function(e) {
-    $("#world-flag-map,#select-map").hide();
-    $("#australia-map,#click-start,#start-game").show();
-    $("#hide-usa,#hide-africa,#hide-europe,#hide-south-america").off();
-    $("#hide-asia,#hide-canada,#hide-central-america,#hide-australia").off();
-    stateInfo = JSON.parse(JSON.stringify(australiaInfo));
-    stateInfo2 = JSON.parse(JSON.stringify(australiaInfo));
-    timer = "0:30";
-    $("#timer").text("00m 30s");
-    info();
-})};
-
-// show pop-up info for each country or state when click
-function showInfo() {
-  $("path").click(function(e) {
-    $("#info-box").css("display","block");
-    $("#info-box").html($(this).data("name")).delay(50).fadeOut();
   });
-  $(document).click(function(e) {
-    $("#info-box").css("top",e.pageY-$("#info-box").height()-20);
-    $("#info-box").css("left",e.pageX-($("#info-box").width())/2);
-  });
-};
+}
 
 // get country or state info from thier objects
 function info() {
@@ -206,47 +417,43 @@ function info() {
 // start the game by setting up variables and calling functions
 function gameStartBinding(){
   $("#start-game").click(function(e) {
-    fadeOut = 500;
-    fadeIn = 500;
     clickCount = 0;
+    score = 0;
+    gameStartTime = Date.now();
+    gameElapsedSeconds = 0;
+    winnerRecorded = false;
     $("#start-game").hide();
-    $("#score").show();
-    $("#click-start").find("#start-game-text").addClass("fadeIn-color");
+    $("#click-start,#score").show();
+    $("#click-start").find("#start-game-text").addClass("fadeIn-color pulsing-state-name");
     $("#score").find("#score-number").addClass("score-color");
     $("#score").find("#percentage").addClass("score-color");
+    $("#score-number").text("0");
     selectName();
-    showInfo();
     checkMatch();
     // set a timer
-    let interval = setInterval(function() {
-      audio1.play();
-      let timer2 = timer.split(":");
-      //by parsing integer, avoid all extra string processing
-      let minutes = parseInt(timer2[0], 10);
-      let seconds = parseInt(timer2[1], 10);
-      --seconds;
-      minutes = (seconds < 0) ? --minutes : minutes;
-      seconds = (seconds < 0) ? 59 : seconds;
-      seconds = (seconds < 10) ? "0" + seconds : seconds;
-      minutes = (minutes < 10) ? "0" + minutes : minutes;
-      $("#timer").text(minutes + "m " + seconds + "s");
-      //check if minutes less than 0
-      if (minutes < 0) clearInterval(interval);
-      //check if both minutes and seconds are 0
-      if (((seconds <= 0) && (minutes <= 0)) || (stateInfoLength === 0)){
-        clearInterval(interval);
-        gameOver()
+    gameTimerInterval = setInterval(function() {
+      secondsRemaining = Math.max(0, secondsRemaining - 1);
+      const remainingMinutes = Math.floor(secondsRemaining / 60);
+      const remainingSeconds = String(secondsRemaining % 60).padStart(2, "0");
+      $("#timer").text(String(remainingMinutes).padStart(2, "0") + "m " + remainingSeconds + "s");
+      if (secondsRemaining === 0 || stateInfoLength === 0) {
+        gameOver();
+        return;
       }
-      if ((seconds <= 10) && (minutes == 0)){
+      if (secondsRemaining <= 10) {
         $("#score").find("#timer").addClass("animated infinite flash flash-color");
       }
-        timer = minutes + ":" + seconds;
     }, 1000);
 })};
 
 // select random country or state name for the user
 function selectName() {
   let key = Object.keys(stateInfo);
+  if (key.length === 0) {
+    $("#start-game-text").text("All states identified!");
+    gameOver();
+    return "";
+  }
   let randomIndex = Math.floor(Math.random() * key.length);
   randomKey = key[randomIndex];
   randomValue = stateInfo[randomKey]
@@ -259,110 +466,83 @@ function selectName() {
 function checkMatch() {
   $("path").bind("click", function(e) {
     let guessedName = $(e.target).data("name");
+    let guessedId = e.currentTarget.id;
     let newName = $("#start-game-text").text();
     let newId = $("#state-id").text();
-    clickCount++;
-    // console.log("Current count: "+ clickCount)
-    // console.log("Guessed name: " + guessedName);
-    // console.log("New name: " + newName);
-    if (guessedName === newName && clickCount === 1){
-      // console.log("Correct1!");
-      $(e.target).addClass("first-click");
+    if (!stateInfo[guessedId]) return;
+
+    if (guessedName === newName) {
+      const pointsForState = 100 / stateInfoLength2;
+      score = Math.min(100, score + pointsForState * Math.max(0, 1 - clickCount / 2));
+      e.currentTarget.classList.remove("hint-highlight");
+      $(e.currentTarget).addClass(clickCount === 0 ? "first-click" : clickCount === 1 ? "second-click" : "third-click");
       delete stateInfo[newId];
       stateInfoLength = Object.keys(stateInfo).length;
-      $("#score-number").text(score);
+      $("#score-number").text(Math.round(score));
       clickCount = 0;
       selectName();
     }
-    else if (guessedName === newName && clickCount === 2){
-      // console.log("Correct2!");
-      $(e.target).addClass("second-click");
-      delete stateInfo[newId];
-      stateInfoLength = Object.keys(stateInfo).length;
-      score -= Math.round((100/stateInfoLength2)/2);
-      $("#score-number").text(score);
-      clickCount = 0;
-      selectName();
-    }
-    else if (guessedName === newName && clickCount > 2) {
-      // console.log("Wrong guessing!");
-      $(e.target).addClass("third-click");
-      delete stateInfo[newId];
-      stateInfoLength = Object.keys(stateInfo).length;
-      score -= Math.round(100/stateInfoLength2);
-      $("#score-number").text(score);
-      clickCount = 0;
-      clearInterval(startInterval);
-      selectName();
-    }
-    else if (clickCount === 2) {
-      startInterval = setInterval(blinker, 1500);
+    else {
+      clickCount++;
+      if (clickCount === 2) {
+        blinker();
+      }
     }
 })};
 
 // make random selected country or state blink for hint
 function blinker() {
   let newId = $("#state-id").text();
-  $("#" + newId).fadeOut(fadeOut);
-  $("#" + newId).fadeIn(fadeIn);
+  const target = document.getElementById(newId);
+  if (!target) return;
+  target.classList.add("hint-highlight");
 };
 
 // declare score with different categories based on the user answers
 function gameOver() {
-  fadeOut = 0;
-  fadeIn = 0;
-  audio1.pause();
-  audio1.currentTime = 0;
-  clearInterval(startInterval);
+  if (winnerRecorded) return;
+  winnerRecorded = true;
+  gameElapsedSeconds = Math.max(0, Math.floor((Date.now() - gameStartTime) / 1000));
+  clearInterval(gameTimerInterval);
+  gameTimerInterval = null;
+  stopGameplayAudio();
+  if (currentPlayerName) {
+    recordWinner(currentPlayerName, Math.round(score), gameElapsedSeconds);
+  }
   $("#click-start,#score").hide();
   $("#myModal").modal({backdrop: "static"});
-  $("path").removeClass("first-click second-click third-click");
+  $("path").removeClass("first-click second-click third-click hint-highlight");
   if (stateInfoLength === 0){
+    playCompletionAudio();
     // console.log("You are done!");
     $("#result-header").text("You are done!");
     $("#result-header").addClass("ec ec-clap emoji");
     $("#final-score").text("Your score: " + score + "%");
     switch (true) {
       case (score >= 85):
-      audio2.play();
       $("#comment").text("Excellent job!");
       $("#final-score").addClass("ec ec-muscle emoji");
       $("#comment").addClass("ec ec-loudspeaker emoji-comment");
       break;
       case (score < 85 && score >= 70):
-      audio3.play();
       $("#comment").text("Good job!");
       $("#final-score").addClass("ec ec-plus1 emoji");
       $("#comment").addClass("ec ec-loudspeaker emoji-comment");
       break;
       case (score < 70 && score >= 55):
-      audio3.play();
       $("#comment").text("You could be better!");
       $("#final-score").addClass("ec ec-slightly-smiling-face emoji");
       $("#comment").addClass("ec ec-loudspeaker emoji-comment");
       break;
       case (score < 55):
-      audio4.play();
       $("#comment").text("You should study geography!");
       $("#final-score").addClass("ec ec-thinking emoji");
       $("#comment").addClass("ec ec-loudspeaker emoji-comment");
       break;
     }
   }
-  else if ((seconds <= 0) && (minutes <= 0) && (stateInfoLength === stateInfoLength2)){
+  else {
     // console.log("Game over!");
-    audio5.play();
-    $("#result-header").text("Game over!");
-    $("#result-header").addClass("ec ec-lock emoji");
-    $("#final-score").text("Time is up!");
-    $("#final-score").addClass("ec ec-stopwatch emoji");
-    $("#comment").text("You have " + (stateInfoLength2 - stateInfoLength) + 
-    " answers out of " + stateInfoLength2 + "!");
-    $("#comment").addClass("ec ec-loudspeaker emoji-comment");
-  }
-  else if ((seconds <= 0) && (minutes <= 0)){
-    // console.log("Game over!");
-    audio5.play();
     $("#result-header").text("Game over!");
     $("#result-header").addClass("ec ec-lock emoji");
     $("#final-score").text("Time is up!");
@@ -376,34 +556,28 @@ function gameOver() {
 // restart the game and reset all variable and classes added and call all functions again
 function gameRestartBinding() {
   $("#close").click(function(e) {
-    // console.log("Game restart!");
-    score = 100;
+    score = 0;
     clickCount = 0;
+    winnerRecorded = false;
+    currentPlayerName = "";
+    gameElapsedSeconds = 0;
+    clearInterval(gameTimerInterval);
+    gameTimerInterval = null;
+    stopGameplayAudio();
+    stopCompletionAudio();
     $("path").off();
-    $("#world-flag-map,#select-map").show();
-    $("#select-map").show();
-    $("#usa-map,#africa-map,#europe-map,#south-america-map").hide();    
-    $("#asia-map,#canada-map,#central-america-map,#australia-map").hide();
-    $("#click-start,#start-game,#state-id,#score").hide();        
+    $("#click-start,#start-game,#state-id,#score").hide();
     $("#start-game-text").text("start button to start the game");
     $("#score-number").text("0");
-    $("path").removeClass("first-click second-click third-click");
+    $("path").removeClass("first-click second-click third-click hint-highlight");
     $("#score").find("#timer").removeClass("animated infinite flash flash-color");
     $("#score").find("#score-number").removeClass("score-color");
     $("#score").find("#percentage").removeClass("score-color");
-    $("#click-start").find("#start-game-text").removeClass("fadeIn-color");
+    $("#click-start").find("#start-game-text").removeClass("fadeIn-color pulsing-state-name");
     $("#result-header").removeClass("ec ec-lock ec-clap emoji");
     $("#final-score").removeClass("ec ec-stopwatch ec-muscle ec-plus1 ec-thinking ec-slightly-smiling-face emoji");
     $("#comment").removeClass("ec ec-loudspeaker");
-    clearInterval(startInterval);
     info();
     usaMapBinding();
-    africaMapBinding();
-    europeMapBinding();
-    southAmericaMapBinding();
-    asiaMapBinding();
-    canadaMapBinding();
-    centralAmericaMapBinding();
-    australiaMapBinding();    
   })
 }

@@ -21,6 +21,7 @@ const hasBrowserEnvironment = typeof window !== "undefined" && typeof document !
 let soundContext = null;
 let gameplayAudioRequested = false;
 let completionAudioRequested = false;
+const incorrectFlashTimers = new WeakMap();
 
 function prepareGameAudio() {
   const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
@@ -155,9 +156,17 @@ if (hasBrowserEnvironment) {
 
     $("#playerNameModal").on("show.bs.modal", function() {
       $("#quiz-name-entry").val("");
+      $("#quiz-name-entry").attr("aria-invalid", "false");
+      $("#player-name-error").prop("hidden", true);
       $("#player-name-form").show();
       $("#duplicate-player-confirm").hide();
       pendingDuplicatePlayerName = "";
+    });
+    $("#quiz-name-entry").on("input", function() {
+      if ($(this).val().trim()) {
+        $(this).attr("aria-invalid", "false");
+        $("#player-name-error").prop("hidden", true);
+      }
     });
     $(".modal").on("shown.bs.modal", function() {
       $(this).find("form:visible input:visible, form:visible textarea:visible, form:visible select:visible").first().trigger("focus");
@@ -187,18 +196,25 @@ if (hasBrowserEnvironment) {
       event.preventDefault();
       const playerName = $("#quiz-name-entry").val().trim();
       if (!playerName) {
+        $("#quiz-name-entry").attr("aria-invalid", "true");
+        $("#player-name-error").prop("hidden", false);
         $("#quiz-name-entry").trigger("focus");
         return;
       }
+      $("#quiz-name-entry").attr("aria-invalid", "false");
+      $("#player-name-error").prop("hidden", true);
 
       const matchingWinner = leaderboardEntries.find(function(entry) {
         return entry.name.trim().toLocaleLowerCase() === playerName.toLocaleLowerCase();
       });
       if (matchingWinner) {
         pendingDuplicatePlayerName = playerName;
-        $("#duplicate-player-message").text(
-          playerName + " already has a leaderboard result. Replacing it will remove the saved result for this name. Continue?"
-        );
+        $("#duplicate-player-message")
+          .empty()
+          .append($("<strong>").text(matchingWinner.name))
+          .append(document.createTextNode(
+            " already has a leaderboard result. Replacing it will remove the saved result for this name. Continue?"
+          ));
         $("#player-name-form").hide();
         $("#duplicate-player-confirm").show();
         $("#replace-existing-result").trigger("focus");
@@ -243,16 +259,33 @@ if (hasBrowserEnvironment) {
     });
     $("#open-reset").on("click", function() {
       $("#reset-password").val("");
-      $("#reset-error").text("");
+      $("#reset-password").attr("aria-invalid", "false");
+      $("#reset-error").text("").prop("hidden", true);
       $("#resetModal").modal("show");
+    });
+    $("#reset-password").on("input", function() {
+      if ($(this).val()) {
+        $(this).attr("aria-invalid", "false");
+        $("#reset-error").text("").prop("hidden", true);
+      }
     });
     $("#reset-form").on("submit", function(event) {
       event.preventDefault();
-      if ($("#reset-password").val() !== leaderboardResetPassword) {
-        $("#reset-error").text("Incorrect password.");
+      const password = $("#reset-password").val();
+      if (!password) {
+        $("#reset-password").attr("aria-invalid", "true");
+        $("#reset-error").text("Please enter your password.").prop("hidden", false);
         $("#reset-password").trigger("focus");
         return;
       }
+      if (password !== leaderboardResetPassword) {
+        $("#reset-password").attr("aria-invalid", "true");
+        $("#reset-error").text("Incorrect password.").prop("hidden", false);
+        $("#reset-password").trigger("focus");
+        return;
+      }
+      $("#reset-password").attr("aria-invalid", "false");
+      $("#reset-error").text("").prop("hidden", true);
       resetSavedPlayerData();
     });
     document.body.classList.remove("ui-loading");
@@ -304,7 +337,15 @@ function renderLeaderboard() {
 
   leaderboardEntries.slice(0, 3).forEach(function(entry, index) {
     const row = $("<tr>");
-    row.append($("<td>").text(index + 1));
+    const ordinalPlaces = ["1st", "2nd", "3rd"];
+    const medalIcons = ["🥇", "🥈", "🥉"];
+    const place = ordinalPlaces[index];
+    const placeCell = $("<td>").attr("aria-label", place + " place");
+    const placeContent = $("<span>").addClass("leaderboard-place");
+    placeContent.append($("<span>").addClass("leaderboard-medal").attr("aria-hidden", "true").text(medalIcons[index]));
+    placeContent.append($("<span>").addClass("leaderboard-rank").text(place));
+    placeCell.append(placeContent);
+    row.append(placeCell);
     row.append($("<td>").text(entry.name));
     row.append($("<td>").text(entry.score + "%"));
     row.append($("<td>").text(formatElapsedTime(entry.elapsedSeconds)));
@@ -419,6 +460,7 @@ function gameStartBinding(){
   $("#start-game").click(function(e) {
     clickCount = 0;
     score = 0;
+    document.body.classList.add("game-active");
     gameStartTime = Date.now();
     gameElapsedSeconds = 0;
     winnerRecorded = false;
@@ -465,17 +507,21 @@ function selectName() {
 // match rendom name with guessed name and return score based on number of click count
 function checkMatch() {
   $("path").bind("click", function(e) {
-    let guessedName = $(e.target).data("name");
-    let guessedId = e.currentTarget.id;
-    let newName = $("#start-game-text").text();
-    let newId = $("#state-id").text();
+    const guessedId = e.currentTarget.id;
+    const newId = $("#state-id").text();
     if (!stateInfo[guessedId]) return;
 
-    if (guessedName === newName) {
+    if (guessedId === newId) {
       const pointsForState = 100 / stateInfoLength2;
       score = Math.min(100, score + pointsForState * Math.max(0, 1 - clickCount / 2));
-      e.currentTarget.classList.remove("hint-highlight");
-      $(e.currentTarget).addClass(clickCount === 0 ? "first-click" : clickCount === 1 ? "second-click" : "third-click");
+      const incorrectFlashTimer = incorrectFlashTimers.get(e.currentTarget);
+      if (incorrectFlashTimer) {
+        clearTimeout(incorrectFlashTimer);
+        incorrectFlashTimers.delete(e.currentTarget);
+      }
+      e.currentTarget.classList.remove("hint-highlight", "first-click", "second-click", "third-click");
+      e.currentTarget.classList.remove("incorrect-flash");
+      $(e.currentTarget).addClass(clickCount === 1 ? "second-click" : clickCount >= 2 ? "third-click" : "first-click");
       delete stateInfo[newId];
       stateInfoLength = Object.keys(stateInfo).length;
       $("#score-number").text(Math.round(score));
@@ -484,6 +530,16 @@ function checkMatch() {
     }
     else {
       clickCount++;
+      const incorrectState = e.currentTarget;
+      const existingTimer = incorrectFlashTimers.get(incorrectState);
+      if (existingTimer) clearTimeout(existingTimer);
+      incorrectState.classList.remove("incorrect-flash");
+      void incorrectState.offsetWidth;
+      incorrectState.classList.add("incorrect-flash");
+      incorrectFlashTimers.set(incorrectState, window.setTimeout(function() {
+        incorrectState.classList.remove("incorrect-flash");
+        incorrectFlashTimers.delete(incorrectState);
+      }, 300));
       if (clickCount === 2) {
         blinker();
       }
@@ -502,6 +558,7 @@ function blinker() {
 function gameOver() {
   if (winnerRecorded) return;
   winnerRecorded = true;
+  document.body.classList.remove("game-active");
   gameElapsedSeconds = Math.max(0, Math.floor((Date.now() - gameStartTime) / 1000));
   clearInterval(gameTimerInterval);
   gameTimerInterval = null;
@@ -558,6 +615,7 @@ function gameRestartBinding() {
   $("#close").click(function(e) {
     score = 0;
     clickCount = 0;
+    document.body.classList.remove("game-active");
     winnerRecorded = false;
     currentPlayerName = "";
     gameElapsedSeconds = 0;
